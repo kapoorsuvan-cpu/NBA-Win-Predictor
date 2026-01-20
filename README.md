@@ -4,6 +4,7 @@ NBA win predictor using linear regression and multiple factors to predict a team
 This project uses a linear regression model in Python to predict NBA team win totals based on three carefully chosen factors: previous-season win percentage, coach continuity, and roster talent. Previous win percentage serves as the baseline indicator of team strength, since NBA teams tend to show strong year-to-year performance persistence due to returning cores and organizational stability. Coach continuity is modeled as a simple binary variable (same coach or new coach) to account for the impact of system familiarity and stability. Roster talent is represented using a custom point system based on All-NBA, All-Star, and All-Defensive selections from the prior season, providing a structured way to capture the influence of high-impact players on team success. The model is trained on recent seasons, converts predicted win percentage into projected wins over an 82-game season, and includes a visualization tool to compare historical trends with new team predictions.
 
 2025-26 Predictions:
+
 <img width="837" height="668" alt="Screenshot 2026-01-20 at 1 42 53 PM" src="https://github.com/user-attachments/assets/dec90305-c7f7-41fb-824f-ee484086c3cb" />
 
 
