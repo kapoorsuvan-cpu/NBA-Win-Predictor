@@ -6,6 +6,7 @@ This project uses a linear regression model in Python to predict NBA team win to
 2025-26 Predictions:
 
 <img width="837" height="668" alt="Screenshot 2026-01-20 at 1 42 53 PM" src="https://github.com/user-attachments/assets/dec90305-c7f7-41fb-824f-ee484086c3cb" />
+<img width="485" height="197" alt="Screenshot 2026-01-20 at 1 52 24 PM" src="https://github.com/user-attachments/assets/61965b63-4ad3-4171-93f4-8507c56f2f04" />
 
 
 
