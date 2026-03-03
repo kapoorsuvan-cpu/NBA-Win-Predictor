@@ -1,41 +1,40 @@
 # app_dashboard.py
 """
-Streamlit dashboard (auto-detects CSV location: csv/ or repo root).
+Streamlit dashboard (robust CSV loader + in-memory training).
 
-Place this next to main.py and your CSVs (either in csv/ or in repo root).
+Place next to main.py and CSVs (either in csv/ or repo root), or upload CSVs via sidebar.
 Then:
-    git add app_dashboard.py
-    git commit -m "Update dashboard with all-teams predictions table"
-    git push
-    (On Streamlit Cloud) Manage App -> Reboot
+    pip install -r requirements.txt
+    streamlit run app_dashboard.py
+
+This version trains from the in-memory training DataFrame using main.train_model()
+to avoid writing files on Streamlit Cloud.
 """
 
 from typing import Optional, Tuple
 import io
 from pathlib import Path
-from main import train_model
-from types import SimpleNamespace
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
-# Import functions/constants from your project
+# Import project functions/constants
 from main import (
-    train_from_csvs,
     _validate_inputs,
     build_training_dataframe,
     predict_team_win_pct,
     predict_team_wins,
-    MODEL,
+    train_model,
 )
+import main as main_module  # used to set main_module.MODEL after training
 
 st.set_page_config(page_title="NBA Win% Dashboard", layout="wide")
 st.title("NBA Win% Model — Dashboard")
 
 # -------------------------
-# Sidebar: data & controls
+# Sidebar / upload controls
 # -------------------------
 st.sidebar.header("Data & Model")
 use_uploads = st.sidebar.checkbox("Use uploaded CSVs (override repo csv/)", value=False)
@@ -52,16 +51,15 @@ retrain_btn = st.sidebar.button("Train / Retrain model")
 st.sidebar.markdown("---")
 st.sidebar.write("Tip: upload all 4 CSVs to test alternate datasets or place CSVs in csv/ folder or repo root.")
 
+
 # -------------------------
-# Helper: read buffer
+# Helpers to load CSVs
 # -------------------------
 @st.cache_data
 def _read_buffer(buffer: io.BytesIO) -> pd.DataFrame:
     return pd.read_csv(buffer, index_col=0, encoding="utf-8-sig")
 
-# -------------------------
-# Helper: robust repo loader
-# -------------------------
+
 REQUIRED_FILES = {
     "prev": "prev_win_pct.csv",
     "coach": "coach_continuity.csv",
@@ -69,27 +67,21 @@ REQUIRED_FILES = {
     "true": "true_win_pct.csv",
 }
 
+
 def _try_load_path(path: Path) -> Optional[pd.DataFrame]:
-    """Return DataFrame if file exists and loads, otherwise None."""
     try:
         if not path.exists():
             return None
         df = pd.read_csv(path, index_col=0, encoding="utf-8-sig")
-        # normalize
         df.columns = [str(c).strip() for c in df.columns]
         df.index = df.index.astype(str).str.strip()
         return df
     except Exception:
         return None
 
+
 def load_data_or_repo() -> Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]]:
-    """
-    Load CSVs in this order:
-      1) If use_uploads: load uploaded files (requires all 4)
-      2) If csv/ directory exists: load csv/<file>.csv
-      3) Else try repo root: <file>.csv
-    """
-    # 1) uploads
+    # 1) uploaded files
     if use_uploads:
         if not (upload_prev and upload_coach and upload_talent and upload_true):
             st.sidebar.warning("Please upload all 4 CSVs to use uploaded data.")
@@ -99,25 +91,31 @@ def load_data_or_repo() -> Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
             coach = _read_buffer(upload_coach)
             talent = _read_buffer(upload_talent)
             true = _read_buffer(upload_true)
+            # normalize
+            prev.columns = [str(c).strip() for c in prev.columns]
+            coach.columns = [str(c).strip() for c in coach.columns]
+            talent.columns = [str(c).strip() for c in talent.columns]
+            true.columns = [str(c).strip() for c in true.columns]
+            prev.index = prev.index.astype(str).str.strip()
+            coach.index = coach.index.astype(str).str.strip()
+            talent.index = talent.index.astype(str).str_strip() if hasattr(talent.index, "astype") else talent.index
+            true.index = true.index.astype(str).str.strip()
             return prev, coach, talent, true
         except Exception as e:
             st.sidebar.error(f"Error reading uploaded CSVs: {e}")
             return None
 
-    # 2) repo files
+    # 2) try csv/ then repo root
     base = Path(__file__).resolve().parent
     csv_dir = base / "csv"
-
-    # prefer csv/ directory if it exists and contains the files
     candidate_dirs = []
     if csv_dir.exists():
         candidate_dirs.append(csv_dir)
-    # always try root as fallback
     candidate_dirs.append(base)
 
-    found = {}
     for d in candidate_dirs:
         ok = True
+        found = {}
         for key, fname in REQUIRED_FILES.items():
             df = _try_load_path(d / fname)
             if df is None:
@@ -127,15 +125,11 @@ def load_data_or_repo() -> Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
         if ok:
             return found["prev"], found["coach"], found["talent"], found["true"]
 
-    # If we reach here, nothing loaded successfully
-    # Provide helpful error message listing what paths were tried
+    # helpful error message listing tried paths
     tried = [str((base / "csv") / fname) for fname in REQUIRED_FILES.values()] + [str((base / fname)) for fname in REQUIRED_FILES.values()]
-    st.error(
-        "Could not find all required CSV files. I tried these locations:\n\n"
-        + "\n".join(tried)
-        + "\n\nPlace the files either in a folder named `csv/` or directly in the repo root, or upload them via the sidebar."
-    )
+    st.error("Could not find all required CSVs. Tried these paths:\n\n" + "\n".join(tried) + "\n\nPlace files in csv/ or repo root, or upload via sidebar.")
     return None
+
 
 # -------------------------
 # Load data
@@ -147,7 +141,7 @@ if data is None:
 
 prev_df, coach_df, talent_df, true_df = data
 
-# validate and build training DataFrame
+# validate and build train_df
 try:
     _validate_inputs(prev_df, coach_df, talent_df, true_df)
     train_df = build_training_dataframe(prev_df, coach_df, talent_df, true_df)
@@ -155,27 +149,29 @@ except Exception as e:
     st.error(f"Error preparing training data: {e}")
     st.stop()
 
+
 # -------------------------
-# Train model (cached)
+# Train model from train_df (no disk writes)
 # -------------------------
 @st.cache_resource
-def _ensure_trained_model_from_df(train_df_local):
+def ensure_trained_from_df(train_df_local: pd.DataFrame):
     """
-    Train a new model directly from the in-memory train_df using main.train_model,
-    set main.MODEL to the returned model, and return it.
+    Train using main.train_model(train_df) and set main_module.MODEL so
+    other helpers predict_team_win_pct/predict_team_wins continue to work.
     """
     model = train_model(train_df_local)
-    # also set the global in main so other predict functions use it
-    import main as main_module
+    # set global in main module for downstream predict_* functions
     main_module.MODEL = model
     return model
 
 if retrain_btn:
-    st.sidebar.info("Training model... (this may take a moment)")
-model = _ensure_trained_model_from_df(train_df)
+    st.sidebar.info("Retraining model from in-memory dataframe...")
+
+model = ensure_trained_from_df(train_df)
 if model is None:
-    st.error("Model not available after training.")
+    st.error("Model training failed.")
     st.stop()
+
 
 # -------------------------
 # Model diagnostics
@@ -195,6 +191,7 @@ with col2:
     coef_df = pd.DataFrame({"coefficient": coefs, "abs": coefs.abs()})
     st.table(coef_df)
 
+    # quick train diagnostics on full data (not holdout)
     X = train_df[["prev_win_pct", "coach_continuity", "roster_talent"]]
     y = train_df["true_win_pct"]
     y_pred = model.predict(X)
@@ -204,35 +201,50 @@ with col2:
     st.metric("R² (train approx.)", f"{r2:.4f}")
     st.markdown(f"**Intercept:** {intercept:.6f}")
 
-# -------------------------
-# Visualizations
-# -------------------------
-st.header("Visualizations")
 
-st.subheader("Feature importance (by |coefficient|)")
+# -------------------------
+# Feature importance (% total)
+# -------------------------
+st.header("Feature importance")
+st.subheader("Feature importance (% of total absolute weight)")
+
 abs_coefs = coefs.abs()
+total_abs = float(abs_coefs.sum())
+if total_abs == 0:
+    importance_pct = abs_coefs * 0.0
+else:
+    importance_pct = (abs_coefs / total_abs) * 100.0
+
 feat_df = (
     pd.DataFrame({
-        "feature": abs_coefs.index,
-        "abs_coef": abs_coefs.values,
+        "feature": importance_pct.index,
+        "importance_pct": importance_pct.values,
         "raw_coef": coefs.values
     })
-    .sort_values("abs_coef", ascending=True)
+    .sort_values("importance_pct", ascending=True)
 )
 
 fig_imp = px.bar(
     feat_df,
-    x="abs_coef",
+    x="importance_pct",
     y="feature",
     orientation="h",
-    text=feat_df["raw_coef"].round(4),
-    labels={"abs_coef": "Absolute coefficient"},
-    title="Feature importance (absolute coefficient)"
+    text=feat_df["importance_pct"].round(1),
+    labels={"importance_pct": "Importance (%)"},
+    title="Feature importance (percentage of total absolute weight)"
 )
 fig_imp.update_layout(height=320, margin=dict(l=40, r=10, t=40, b=10))
 st.plotly_chart(fig_imp, use_container_width=True)
 
-st.subheader("Historical: Previous season win% vs True win%")
+pct_table = feat_df[["feature", "importance_pct"]].sort_values("importance_pct", ascending=False).reset_index(drop=True)
+pct_table["importance_pct"] = pct_table["importance_pct"].round(2)
+st.table(pct_table.rename(columns={"importance_pct": "importance (%)"}))
+
+
+# -------------------------
+# Visualizations: scatter
+# -------------------------
+st.header("Historical: Previous season win% vs True win%")
 corr = np.corrcoef(train_df["prev_win_pct"], train_df["true_win_pct"])[0, 1]
 fig_scatter = px.scatter(
     train_df,
@@ -244,76 +256,82 @@ fig_scatter = px.scatter(
 )
 st.plotly_chart(fig_scatter, use_container_width=True)
 
-# -------------------------
-# All teams predictions table
-# -------------------------
-st.header("Predicted win totals for all teams")
 
-# Determine which columns to use (most recent available)
-# Use last column in prev_df for previous season; last column in coach_df and talent_df for inputs
-prev_col = prev_df.columns[-1]
-coach_col = coach_df.columns[-1]
-talent_col = talent_df.columns[-1]
+# -------------------------
+# All teams predictions (2025-26 inputs provided)
+# -------------------------
+st.header("Predicted win totals for all teams (2025-26 inputs)")
 
-teams = sorted(prev_df.index.tolist())
+teams_2026 = {
+    "ATL": {"prev_win_pct": 0.49, "coach_continuity": 1, "roster_talent": 3},
+    "BOS": {"prev_win_pct": 0.74, "coach_continuity": 1, "roster_talent": 5},
+    "BRK": {"prev_win_pct": 0.32, "coach_continuity": 1, "roster_talent": 0},
+    "CHI": {"prev_win_pct": 0.48, "coach_continuity": 1, "roster_talent": 0},
+    "CHO": {"prev_win_pct": 0.23, "coach_continuity": 1, "roster_talent": 0},
+    "CLE": {"prev_win_pct": 0.78, "coach_continuity": 1, "roster_talent": 10},
+    "DAL": {"prev_win_pct": 0.48, "coach_continuity": 1, "roster_talent": 2},
+    "DEN": {"prev_win_pct": 0.61, "coach_continuity": 0, "roster_talent": 4},
+    "DET": {"prev_win_pct": 0.54, "coach_continuity": 1, "roster_talent": 5},
+    "GSW": {"prev_win_pct": 0.59, "coach_continuity": 1, "roster_talent": 2},
+    "HOU": {"prev_win_pct": 0.63, "coach_continuity": 1, "roster_talent": 4},
+    "IND": {"prev_win_pct": 0.61, "coach_continuity": 1, "roster_talent": 3},
+    "LAC": {"prev_win_pct": 0.61, "coach_continuity": 1, "roster_talent": 2},
+    "LAL": {"prev_win_pct": 0.61, "coach_continuity": 1, "roster_talent": 3},
+    "MEM": {"prev_win_pct": 0.59, "coach_continuity": 0, "roster_talent": 2},
+    "MIA": {"prev_win_pct": 0.45, "coach_continuity": 1, "roster_talent": 1},
+    "MIL": {"prev_win_pct": 0.59, "coach_continuity": 1, "roster_talent": 4},
+    "MIN": {"prev_win_pct": 0.60, "coach_continuity": 1, "roster_talent": 3},
+    "NOP": {"prev_win_pct": 0.26, "coach_continuity": 1, "roster_talent": 0},
+    "NYK": {"prev_win_pct": 0.62, "coach_continuity": 0, "roster_talent": 5},
+    "OKC": {"prev_win_pct": 0.83, "coach_continuity": 1, "roster_talent": 8},
+    "ORL": {"prev_win_pct": 0.50, "coach_continuity": 1, "roster_talent": 0},
+    "PHI": {"prev_win_pct": 0.29, "coach_continuity": 1, "roster_talent": 0},
+    "PHO": {"prev_win_pct": 0.44, "coach_continuity": 0, "roster_talent": 0},
+    "POR": {"prev_win_pct": 0.44, "coach_continuity": 0, "roster_talent": 0},
+    "SAC": {"prev_win_pct": 0.49, "coach_continuity": 1, "roster_talent": 0},
+    "SAS": {"prev_win_pct": 0.42, "coach_continuity": 0, "roster_talent": 1},
+    "TOR": {"prev_win_pct": 0.37, "coach_continuity": 1, "roster_talent": 0},
+    "UTA": {"prev_win_pct": 0.21, "coach_continuity": 1, "roster_talent": 0},
+    "WAS": {"prev_win_pct": 0.22, "coach_continuity": 1, "roster_talent": 0},
+}
 
 rows = []
-for team in teams:
+for team, vals in teams_2026.items():
+    prev_pct = float(vals["prev_win_pct"])
+    coach_val = int(vals["coach_continuity"])
+    talent_val = float(vals["roster_talent"])
     try:
-        prev_win_pct = float(prev_df.loc[team, prev_col])
+        pred_pct = predict_team_win_pct(prev_pct, coach_val, talent_val)
+        pred_wins = predict_team_wins(prev_pct, coach_val, talent_val)
     except Exception:
-        # if missing or invalid, skip
-        prev_win_pct = np.nan
-    try:
-        coach_val = int(coach_df.loc[team, coach_col])
-    except Exception:
-        coach_val = 0
-    try:
-        talent_val = float(talent_df.loc[team, talent_col])
-    except Exception:
-        talent_val = np.nan
-
-    if np.isnan(prev_win_pct) or np.isnan(talent_val):
         pred_pct = np.nan
         pred_wins = np.nan
-    else:
-        pred_pct = predict_team_win_pct(prev_win_pct, int(coach_val), float(talent_val))
-        pred_wins = predict_team_wins(prev_win_pct, int(coach_val), float(talent_val))
 
     rows.append({
         "team": team,
-        "prev_col_used": prev_col,
-        "prev_win_pct": prev_win_pct,
-        "coach_col_used": coach_col,
-        "coach_continuity": coach_val,
-        "talent_col_used": talent_col,
-        "roster_talent": talent_val,
+        "prev_win_pct_input": prev_pct,
+        "coach_continuity_input": coach_val,
+        "roster_talent_input": talent_val,
         "pred_win_pct": pred_pct,
         "pred_wins": pred_wins,
     })
 
-pred_df = pd.DataFrame(rows)
-# convert to readable percentages / sorting
-pred_df["prev_win_pct"] = pred_df["prev_win_pct"].astype(float)
-pred_df["pred_win_pct"] = pred_df["pred_win_pct"].astype(float)
-pred_df["pred_wins"] = pred_df["pred_wins"].astype(float)
+pred_teams_df = pd.DataFrame(rows)
+pred_teams_df["pred_wins"] = pred_teams_df["pred_wins"].astype(float)
+pred_teams_df["pred_win_pct"] = pred_teams_df["pred_win_pct"].astype(float)
 
-# sort by predicted wins descending
-pred_df_sorted = pred_df.sort_values("pred_wins", ascending=False).reset_index(drop=True)
-
-# show table
-st.dataframe(pred_df_sorted.style.format({
-    "prev_win_pct": "{:.3f}",
+pred_teams_df_sorted = pred_teams_df.sort_values("pred_wins", ascending=False).reset_index(drop=True)
+st.dataframe(pred_teams_df_sorted.style.format({
+    "prev_win_pct_input": "{:.3f}",
     "pred_win_pct": "{:.3f}",
     "pred_wins": "{:.1f}"
-}), height=500)
+}), height=520)
 
-# Offer CSV download
-csv_bytes = pred_df_sorted.to_csv(index=False).encode("utf-8")
-st.download_button("Download all-team predictions (CSV)", data=csv_bytes, file_name="all_team_predictions.csv", mime="text/csv")
+st.download_button("Download 2025-26 predictions (CSV)", data=pred_teams_df_sorted.to_csv(index=False).encode("utf-8"), file_name="predictions_2025_26.csv", mime="text/csv")
+
 
 # -------------------------
-# Per-team historical inspector
+# Team inspector
 # -------------------------
 st.header("Team history inspector")
 teams = sorted(train_df["team"].unique())
@@ -330,6 +348,7 @@ if team_choice:
         title=f"{team_choice}: previous vs true win% by season"
     )
     st.plotly_chart(fig_team, use_container_width=True)
+
 
 # -------------------------
 # Interactive predictor
@@ -364,8 +383,9 @@ if submit:
         fig_overlay.add_scatter(x=[prev_win_pct_val], y=[pred_pct_val], mode="markers", marker=dict(size=14, symbol="x", color="red"), name="Prediction")
         st.plotly_chart(fig_overlay, use_container_width=True)
 
+
 # -------------------------
-# Export & download
+# Export & downloads
 # -------------------------
 st.header("Export & downloads")
 if st.button("Download coefficients CSV"):
