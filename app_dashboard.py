@@ -13,6 +13,7 @@ Then:
 from typing import Optional, Tuple
 import io
 from pathlib import Path
+from main import CSV_PREV_WIN, CSV_COACH, CSV_TALENT, CSV_TRUE_WIN
 
 import streamlit as st
 import pandas as pd
@@ -157,15 +158,35 @@ except Exception as e:
 # Train model (cached)
 # -------------------------
 @st.cache_resource
-def _ensure_trained_model():
-    """Train model by calling main.train_from_csvs(). Returns the trained MODEL object from main."""
+def _ensure_trained_model(prev_df_local, coach_df_local, talent_df_local, true_df_local):
+    """
+    Ensures the model in main.py is trained.
+    We save the in-memory DataFrames (which may have come from repo root, csv/,
+    or uploaded files) to the exact file paths main.train_from_csvs() expects,
+    then call train_from_csvs(). Returns the trained MODEL from main.
+    """
+    # Write the DataFrames to disk where main.train_from_csvs() expects them.
+    # This ensures training works regardless of where the files originally lived.
+    try:
+        prev_df_local.to_csv(CSV_PREV_WIN, index=True, encoding="utf-8-sig")
+        coach_df_local.to_csv(CSV_COACH, index=True, encoding="utf-8-sig")
+        talent_df_local.to_csv(CSV_TALENT, index=True, encoding="utf-8-sig")
+        true_df_local.to_csv(CSV_TRUE_WIN, index=True, encoding="utf-8-sig")
+    except Exception as e:
+        # If we cannot write files, expose a helpful error for debugging
+        raise RuntimeError(f"Failed to write CSVs to {CSV_PREV_WIN.parent}: {e}") from e
+
+    # Now call the existing training routine (which will read those files)
+    from main import train_from_csvs
     train_from_csvs()
-    from main import MODEL as m
-    return m
+
+    # Import the MODEL object that train_from_csvs() set
+    from main import MODEL as trained_model
+    return trained_model
 
 if retrain_btn:
     st.sidebar.info("Training model... (this may take a moment)")
-model = _ensure_trained_model()
+model = _ensure_trained_model(prev_df, coach_df, talent_df, true_df)
 if model is None:
     st.error("Model not available after training.")
     st.stop()
