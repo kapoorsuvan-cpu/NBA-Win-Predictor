@@ -35,14 +35,46 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        .block-container {padding-top: 1.4rem; padding-bottom: 2rem;}
-        h1, h2, h3 {letter-spacing: -0.02em;}
-        div[data-testid="stMetric"] {
-            background-color: #f7f7f7;
-            border: 1px solid #e5e5e5;
-            padding: 14px 16px;
-            border-radius: 10px;
+        .block-container {
+            padding-top: 1.4rem;
+            padding-bottom: 2rem;
         }
+
+        h1, h2, h3 {
+            letter-spacing: -0.02em;
+        }
+
+        div[data-testid="stMetric"] {
+            background-color: #f4f4f4 !important;
+            border: 1px solid #d0d0d0 !important;
+            padding: 10px 12px !important;
+            border-radius: 10px !important;
+            min-height: 105px !important;
+        }
+
+        div[data-testid="stMetric"] * {
+            color: #111111 !important;
+        }
+
+        div[data-testid="stMetric"] label {
+            font-size: 0.72rem !important;
+            line-height: 1.1 !important;
+            white-space: normal !important;
+            overflow-wrap: break-word !important;
+        }
+
+        div[data-testid="stMetricValue"] {
+            font-size: 1.25rem !important;
+            line-height: 1.15 !important;
+            white-space: normal !important;
+            overflow-wrap: break-word !important;
+        }
+
+        div[data-testid="stMetricDelta"] {
+            font-size: 0.78rem !important;
+            line-height: 1.1 !important;
+        }
+
         .small-note {
             color: #555;
             font-size: 0.92rem;
@@ -161,7 +193,7 @@ def make_actual_vs_pred_all_teams(selected_teams: list[str]) -> pd.DataFrame:
 # =============================
 st.title("NBA Win Percentage Predictor")
 st.markdown(
-    "A clean dashboard for testing win percentage projections using previous win percentage and roster talent. "
+    "Testing win percentage projections using previous win percentage and roster talent. "
     "The saved 25-26 team predictions use the final calibrated output from the model run."
 )
 
@@ -172,10 +204,10 @@ leader = pred_df.iloc[0]
 median_team = pred_df.iloc[(len(pred_df) // 2)]
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Validation MAE on 24-25", f"{VALIDATION_MAE_2425:.4f}")
-c2.metric("Model weights", f"Prev {W_PREV:.2f} / Talent {W_TALENT:.2f}")
-c3.metric("Highest projected team", f"{leader['Team']}", f"{leader['pred_wins']} wins")
-c4.metric("Median projected wins", f"{int(round(pred_df['pred_wins'].median()))}")
+c1.metric("Val MAE", f"{VALIDATION_MAE_2425:.4f}")
+c2.metric("Weights", f"P {W_PREV:.2f} / T {W_TALENT:.2f}")
+c3.metric("Top Team", f"{leader['Team']}", f"{leader['pred_wins']} wins")
+c4.metric("Median Wins", f"{int(round(pred_df['pred_wins'].median()))}")
 
 st.divider()
 
@@ -191,15 +223,8 @@ selected_teams = st.sidebar.multiselect(
     default=default_teams,
 )
 selected_single_team = st.sidebar.selectbox("Single-team view", options=all_teams, index=all_teams.index("OKC") if "OKC" in all_teams else 0)
-min_projected_wins = st.sidebar.slider(
-    "Minimum projected wins in table",
-    min_value=int(pred_df["pred_wins"].min()),
-    max_value=int(pred_df["pred_wins"].max()),
-    value=int(pred_df["pred_wins"].min()),
-)
 
-filtered_pred = pred_df[pred_df["pred_wins"] >= min_projected_wins].copy()
-
+filtered_pred = pred_df.copy()
 # =============================
 # User input simulator
 # =============================
@@ -228,9 +253,9 @@ custom_pred_pct, custom_pred_wins, custom_raw_score = predict_win_pct(prev_input
 
 with right:
     r1, r2, r3 = st.columns(3)
-    r1.metric("Predicted win percentage", f"{custom_pred_pct:.3f}")
-    r2.metric("Projected wins", f"{custom_pred_wins:.1f}")
-    r3.metric("Raw model score", f"{custom_raw_score:.3f}")
+    r1.metric("Pred Win %", f"{custom_pred_pct:.3f}")
+    r2.metric("Proj Wins", f"{custom_pred_wins:.1f}")
+    r3.metric("Raw Score", f"{custom_raw_score:.3f}")
 
     st.markdown(
         f"""
