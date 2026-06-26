@@ -1,0 +1,4 @@
+Validation MAE on 24-25: 0.0990
+Weights: prev=0.60, coach=0.00, talent=0.40
+Roster talent scale min/max from training seasons: 0.00/10.00
+Final 25-26 predictions use isotonic ordering + empirical quantile calibration.
